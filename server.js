@@ -23,11 +23,12 @@ const corsOptions = {
   },
   methods: ['GET', 'POST', 'OPTIONS'],
   allowedHeaders: ['Content-Type'],
-  credentials: false
+  credentials: false,
 };
 
 app.use(cors(corsOptions));
-app.options('*', cors(corsOptions));
+// ✅ Express 5 fix: use a regex instead of '*' to handle preflight
+app.options(/.*/, cors(corsOptions));
 app.use(express.json());
 
 // ---------- Mongo ----------
@@ -47,8 +48,8 @@ const io = new Server(httpServer, {
       if (!origin || ALLOWED_ORIGINS.includes(origin)) return cb(null, true);
       return cb(new Error('Not allowed by CORS (socket)'));
     },
-    methods: ['GET', 'POST']
-  }
+    methods: ['GET', 'POST'],
+  },
 });
 
 io.on('connection', (socket) => {
@@ -60,9 +61,8 @@ app.set('io', io);
 // ---------- Routes ----------
 app.get('/', (_req, res) => res.send('API is running'));
 
-// ✅ Health probe (added)
+// Health probe
 app.get('/health', (_req, res) => {
-  // 0=disconnected, 1=connected, 2=connecting, 3=disconnecting
   res.json({ ok: true, state: mongoose.connection.readyState });
 });
 
@@ -78,7 +78,7 @@ app.post('/messages', async (req, res) => {
       meta_msg_id,
       profileName,
       fromSelf,
-      clientId // pass-through for echo suppression on client
+      clientId, // pass-through for echo suppression on client
     } = req.body || {};
 
     if (!wa_id || !text) {
@@ -93,7 +93,7 @@ app.post('/messages', async (req, res) => {
       timestamp: timestamp ? new Date(timestamp) : new Date(),
       status: status || 'sent',
       profileName: profileName || 'Unknown',
-      fromSelf: !!fromSelf
+      fromSelf: !!fromSelf,
     });
 
     // broadcast (include clientId so sender can ignore its own echo)
@@ -175,8 +175,8 @@ app.get('/conversations', async (_req, res) => {
           _id: '$wa_id',
           lastMsg: { $first: '$text' },
           lastTimestamp: { $first: '$timestamp' },
-          status: { $first: '$status' }
-        }
+          status: { $first: '$status' },
+        },
       },
       {
         $project: {
@@ -184,10 +184,10 @@ app.get('/conversations', async (_req, res) => {
           lastMsg: 1,
           lastTimestamp: 1,
           status: 1,
-          _id: 0
-        }
+          _id: 0,
+        },
       },
-      { $sort: { lastTimestamp: -1 } }
+      { $sort: { lastTimestamp: -1 } },
     ]);
     res.json(chats);
   } catch (err) {

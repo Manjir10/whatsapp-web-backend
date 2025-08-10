@@ -10,11 +10,27 @@ import MessageModel from './models/Message.js';
 
 const app = express();
 
-// CORS + body
-app.use(cors());
+// ---------- CORS (tight, with proper preflight) ----------
+const ALLOWED_ORIGINS = [
+  'http://localhost:5173',        // Vite dev
+  process.env.FRONTEND_ORIGIN || '' // e.g. https://your-frontend.onrender.com
+].filter(Boolean);
+
+const corsOptions = {
+  origin(origin, cb) {
+    if (!origin || ALLOWED_ORIGINS.includes(origin)) return cb(null, true);
+    return cb(new Error('Not allowed by CORS'));
+  },
+  methods: ['GET', 'POST', 'OPTIONS'],
+  allowedHeaders: ['Content-Type'],
+  credentials: false
+};
+
+app.use(cors(corsOptions));
+app.options('*', cors(corsOptions));
 app.use(express.json());
 
-// Mongo
+// ---------- Mongo ----------
 const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017/whatsapp';
 const PORT = process.env.PORT || 5001;
 
@@ -22,19 +38,33 @@ mongoose.connect(MONGODB_URI, { dbName: 'whatsapp' })
   .then(() => console.log('✅ MongoDB connected'))
   .catch(err => console.error('❌ MongoDB connection error:', err));
 
-// HTTP + Socket.IO
+// ---------- HTTP + Socket.IO ----------
 const httpServer = http.createServer(app);
 const io = new Server(httpServer, {
-  cors: { origin: 'http://localhost:5173', methods: ['GET', 'POST'] },
-  path: '/socket.io'
+  path: '/socket.io',
+  cors: {
+    origin(origin, cb) {
+      if (!origin || ALLOWED_ORIGINS.includes(origin)) return cb(null, true);
+      return cb(new Error('Not allowed by CORS (socket)'));
+    },
+    methods: ['GET', 'POST']
+  }
 });
+
 io.on('connection', (socket) => {
   console.log('🔌 socket connected', socket.id);
 });
+
 app.set('io', io);
 
-// Routes
+// ---------- Routes ----------
 app.get('/', (_req, res) => res.send('API is running'));
+
+// ✅ Health probe (added)
+app.get('/health', (_req, res) => {
+  // 0=disconnected, 1=connected, 2=connecting, 3=disconnecting
+  res.json({ ok: true, state: mongoose.connection.readyState });
+});
 
 // Save message
 app.post('/messages', async (req, res) => {
@@ -48,7 +78,7 @@ app.post('/messages', async (req, res) => {
       meta_msg_id,
       profileName,
       fromSelf,
-      clientId // <-- just pass-through; not stored
+      clientId // pass-through for echo suppression on client
     } = req.body || {};
 
     if (!wa_id || !text) {
@@ -66,7 +96,7 @@ app.post('/messages', async (req, res) => {
       fromSelf: !!fromSelf
     });
 
-    // Re-emit with clientId so the sender can ignore its own echo
+    // broadcast (include clientId so sender can ignore its own echo)
     io.emit('message:new', { ...doc.toObject(), clientId: clientId || null });
 
     return res.status(201).json(doc);
@@ -103,6 +133,7 @@ app.post('/delivered', async (req, res) => {
       { $set: { status: 'delivered' } },
       { new: true }
     );
+
     if (!updated) return res.status(404).json({ error: 'Message not found' });
 
     io.emit('message:status', { wa_id: updated.wa_id, msg_id: updated.msg_id, status: 'delivered' });
@@ -123,6 +154,7 @@ app.post('/read', async (req, res) => {
       { $set: { status: 'read' } },
       { new: true }
     );
+
     if (!updated) return res.status(404).json({ error: 'Message not found' });
 
     io.emit('message:status', { wa_id: updated.wa_id, msg_id: updated.msg_id, status: 'read' });
@@ -164,7 +196,7 @@ app.get('/conversations', async (_req, res) => {
   }
 });
 
-// Start
+// ---------- Start ----------
 httpServer.listen(PORT, () => {
   console.log(`🚀 Server running on ${PORT}`);
 });
